@@ -10,8 +10,8 @@ with an input keyword.
 
 --dos-interface:
   legacy   &DFT%PRINT%PDOS  (present in the CP2K 2026.1 schema on this cluster)
-  unified  &DFT%PRINT%DOS with &PDOS nested (the 2026.2 layout seen on coaraci);
-           run scripts/probe_build.sh first -- 2026.1 rejects it.
+  unified  &DFT%PRINT%DOS (NLUMO) with &PDOS nested (CP2K >= 2026.2, verified on
+           coaraci); 2026.1 rejects it -- run scripts/probe_build.sh first.
 
   python ~/work_cp2k/05_pdos.py --structure ZrO2_m_relaxed.cif --basis DZVP-MOLOPT-SR-GTH \\
       --project ZrO2_m_pdos --cutoff 700 --rel-cutoff 60 --supercell 3 3 3
@@ -37,13 +37,13 @@ def main():
     st = cb.read_structure(a.structure)
     sc = st.copy()
     sc.make_supercell(a.supercell)
-    def pdos(ind):
-        return (f"{ind}&PDOS\n{ind}  COMPONENTS\n{ind}  NLUMO {a.nlumo}\n{ind}&END PDOS\n")
-
     if a.dos_interface == "legacy":
-        dft_print = "    &PRINT\n" + pdos(" " * 6) + "    &END PRINT\n"
-    else:
-        dft_print = "    &PRINT\n      &DOS\n" + pdos(" " * 8) + "      &END DOS\n    &END PRINT\n"
+        dft_print = ("    &PRINT\n      &PDOS\n        COMPONENTS\n"
+                     f"        NLUMO {a.nlumo}\n      &END PDOS\n    &END PRINT\n")
+    else:  # 2026.2 layout (verified on coaraci): NLUMO moves up to &DOS, &PDOS nested
+        dft_print = ("    &PRINT\n      &DOS\n"
+                     f"        NLUMO {a.nlumo}\n        &PDOS\n          COMPONENTS\n"
+                     "        &END PDOS\n      &END DOS\n    &END PRINT\n")
     text = cb.build_input(sc, a, run_type="ENERGY", kpoints=[1, 1, 1], dft_print=dft_print,
                           scf_kwargs=dict(restart_print=False))
     path = cb.write_input(text, a.output_dir, a.project)

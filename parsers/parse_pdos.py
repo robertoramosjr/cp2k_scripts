@@ -24,14 +24,18 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.cp2k_blocks import HARTREE_EV  # noqa: E402
 
-RE_HEAD = re.compile(r"atomic kind\s+(\S+).*E\(Fermi\)\s*=\s*([-\d.Ee+]+)\s*a\.u\.")
+RE_KIND = re.compile(r"atomic kind\s+(\S+)")
+RE_EF = re.compile(r"E\(Fermi\)\s*=\s*([-\d.Ee+]+)\s*a\.u\.")
 
 
 def read_pdos(path: Path):
-    lines = path.read_text().splitlines()
-    m = RE_HEAD.search(lines[0])
-    kind, ef = m.group(1), float(m.group(2)) * HARTREE_EV
-    cols = lines[1].lstrip("#").replace("Eigenvalue [a.u.]", "Eigenvalue").split()
+    """Scans every header line: 2026.1 puts kind and E(Fermi) on line 1;
+    2026.2 splits them across lines (coaraci, verified on a real file)."""
+    head = [l for l in path.read_text().splitlines() if l.startswith("#")]
+    kind = next(m.group(1) for l in head if (m := RE_KIND.search(l)))
+    ef = float(next(m.group(1) for l in head if (m := RE_EF.search(l)))) * HARTREE_EV
+    colline = next(l for l in head if "Occupation" in l)
+    cols = colline.lstrip("#").replace("Eigenvalue [a.u.]", "Eigenvalue").split()
     cols = cols[cols.index("Occupation") + 1:]
     data = np.loadtxt(path, comments="#")
     return kind, ef, data[:, 1] * HARTREE_EV, cols, data[:, 3:]

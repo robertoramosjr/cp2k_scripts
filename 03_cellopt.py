@@ -30,6 +30,8 @@ def main():
     p.add_argument("--max-iter", type=int, default=cb.DEFAULTS["max_iter"])
     p.add_argument("--max-force", type=float, default=cb.DEFAULTS["max_force"])
     p.add_argument("--pressure-tolerance", type=float, default=cb.DEFAULTS["pressure_tolerance"])
+    p.add_argument("--keep-space-group", action="store_true",
+                   help="MOTION/CELL_OPT KEEP_SPACE_GROUP (preserve the symmetry during the run).")
     a = p.parse_args()
 
     st = cb.read_structure(a.structure)
@@ -37,7 +39,8 @@ def main():
         st, a, run_type="CELL_OPT", kpoints=a.kpoints, cell_ref_factor=a.cell_ref_factor,
         stress=True, scf_kwargs=dict(restart_print=True),
         motion_kwargs=dict(max_iter=a.max_iter, max_force=a.max_force,
-                           pressure_tolerance=a.pressure_tolerance))
+                           pressure_tolerance=a.pressure_tolerance,
+                           keep_space_group=a.keep_space_group))
     path = cb.write_input(text, a.output_dir, a.project)
     (Path(a.output_dir) / "run_meta.json").write_text(json.dumps(dict(
         step="03_cellopt", kpoints=a.kpoints, cutoff=a.cutoff, rel_cutoff=a.rel_cutoff,

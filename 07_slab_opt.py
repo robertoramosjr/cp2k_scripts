@@ -33,7 +33,19 @@ from core import cp2k_blocks as cb  # noqa: E402
 from pymatgen.core import Lattice, Structure  # noqa: E402
 
 
-def rescale(slab: Structure, meta: dict, bulk_ref: Structure, bulk_new: Structure):
+def set_vacuum(slab: Structure, vacuum: float) -> Structure:
+    """Same in-plane cell and atoms, c (along z) = thickness + vacuum, slab centred."""
+    z = slab.cart_coords[:, 2]
+    zc = 0.5 * (z.max() + z.min())
+    c = (z.max() - z.min()) + vacuum
+    L = slab.lattice
+    lat = Lattice.from_parameters(L.a, L.b, c, 90.0, 90.0, L.gamma)
+    frac = slab.frac_coords.copy()
+    frac[:, 2] = ((z - zc) + c / 2.0) / c
+    return Structure(lat, slab.species, frac)
+
+
+def rescale(slab: Structure, meta: dict, bulk_ref: Structure, bulk_new: Structure, vacuum: float):
     u1, u2 = (np.array(u) for u in meta["uvw_in_plane"])
     n1, n2 = u1 @ bulk_new.lattice.matrix, u2 @ bulk_new.lattice.matrix
     hkl = meta["hkl"]
@@ -43,7 +55,7 @@ def rescale(slab: Structure, meta: dict, bulk_ref: Structure, bulk_new: Structur
     z = slab.cart_coords[:, 2]
     zc = 0.5 * (z.max() + z.min())
     t_new = (z.max() - z.min()) * zscale
-    c = t_new + meta["vacuum_A"]
+    c = t_new + vacuum
     lat = Lattice.from_parameters(l1, l2, c, 90.0, 90.0, gam)
     frac = slab.frac_coords.copy()
     frac[:, 2] = ((z - zc) * zscale + c / 2.0) / c
@@ -58,6 +70,10 @@ def main():
                    help="CP2K-relaxed bulk (same setting as the cut bulk). Omit ONLY for previews.")
     p.add_argument("--k-density", type=float, required=True)
     p.add_argument("--no-dipole", action="store_true")
+    p.add_argument("--vacuum", type=float, default=None,
+                   help="Vacuum along z (angstrom); default: the value used by 06.")
+    p.add_argument("--run-type", choices=["GEO_OPT", "ENERGY"], default="GEO_OPT",
+                   help="ENERGY = single point (vacuum/thickness convergence tests).")
     p.add_argument("--max-iter", type=int, default=cb.DEFAULTS["max_iter"])
     p.add_argument("--max-force", type=float, default=cb.DEFAULTS["max_force"])
     cb.add_common_args(p, need_kpoints=False)
@@ -73,22 +89,26 @@ def main():
     slab = cb.read_structure(a.structure or d / "POSCAR")
     a.project = a.project or f"slab_{''.join(str(h) for h in meta['hkl'])}_{meta['termination']}"
     a.output_dir = a.output_dir if a.output_dir != "." else str(d)
+    vacuum = a.vacuum if a.vacuum is not None else meta["vacuum_A"]
     if a.bulk_cp2k:
         if None in meta["uvw_in_plane"]:
             sys.exit("ERROR: slab_meta.json has no rational [uvw]; cannot rescale.")
         slab, strain, zscale, t_new = rescale(slab, meta, cb.read_structure(meta["bulk"]),
-                                              cb.read_structure(a.bulk_cp2k))
+                                              cb.read_structure(a.bulk_cp2k), vacuum)
     else:
+        slab = set_vacuum(slab, vacuum)
         strain, zscale, t_new = (0.0, 0.0), 1.0, meta["thickness_A"]
-        print("[WARNING] no --bulk-cp2k: slab left on the VASP lattice (preview only).")
+        print("[WARNING] no --bulk-cp2k: slab left on the VASP lattice (tests/previews only).")
     kx, ky, _ = cb.kmesh_from_density(slab.lattice, a.k_density, periodic=(True, True, False))
     text = cb.build_input(
-        slab, a, run_type="GEO_OPT", kpoints=[kx, ky, 1], surface_dipole=not a.no_dipole,
-        scf_kwargs=dict(restart_print=True),
+        slab, a, run_type=a.run_type, kpoints=[kx, ky, 1], surface_dipole=not a.no_dipole,
+        scf_kwargs=dict(restart_print=a.run_type == "GEO_OPT"),
         motion_kwargs=dict(max_iter=a.max_iter, max_force=a.max_force))
     path = cb.write_input(text, a.output_dir, a.project)
     slab.to(filename=str(Path(a.output_dir) / "slab_cp2k_start.cif"))
-    run_meta = dict(step="07_slab_opt", kpoints=[kx, ky, 1], k_density=a.k_density,
+    run_meta = dict(step="07_slab_opt", run_type=a.run_type, vacuum_A=vacuum, hkl=meta["hkl"],
+                    termination=meta["termination"], n_formula_units=meta["n_formula_units"],
+                    kpoints=[kx, ky, 1], k_density=a.k_density,
                     cutoff=a.cutoff, rel_cutoff=a.rel_cutoff, basis=a.basis,
                     bulk_cp2k=str(Path(a.bulk_cp2k).resolve()) if a.bulk_cp2k else None,
                     inplane_strain_vs_vasp=list(strain), zscale=zscale,

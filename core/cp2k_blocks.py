@@ -316,7 +316,8 @@ def build_kpoints_block(kpoints, parallel_group_size=DEFAULTS["parallel_group_si
 def build_motion_block(run_type: str, *, max_iter=DEFAULTS["max_iter"],
                        max_force=DEFAULTS["max_force"], optimizer=DEFAULTS["optimizer"],
                        pressure_tolerance=DEFAULTS["pressure_tolerance"],
-                       external_pressure=DEFAULTS["external_pressure"], natoms=None) -> str:
+                       external_pressure=DEFAULTS["external_pressure"], natoms=None,
+                       keep_space_group=False) -> str:
     """optimizer AUTO: BFGS (dense Hessian) up to DEFAULTS['lbfgs_above'] atoms,
     LBFGS beyond. EXTERNAL_PRESSURE is always written: the CP2K default is
     100 bar, which would relax every bulk under compression."""
@@ -329,6 +330,8 @@ def build_motion_block(run_type: str, *, max_iter=DEFAULTS["max_iter"],
     if run_type == "CELL_OPT":
         body += ["    TYPE DIRECT_CELL_OPT", f"    EXTERNAL_PRESSURE [bar] {external_pressure:g}",
                  f"    PRESSURE_TOLERANCE [bar] {pressure_tolerance:g}"]
+    if keep_space_group:  # spec etapa 2: optional, preserves the space group during the run
+        body += ["    KEEP_SPACE_GROUP TRUE"]
     body += [f"    OPTIMIZER {optimizer}", f"    MAX_ITER {max_iter}",
              f"    MAX_FORCE [eV*angstrom^-1] {max_force}", f"  &END {sec}"]
     return ("&MOTION\n" + "\n".join(body) + "\n"
