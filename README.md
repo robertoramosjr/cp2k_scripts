@@ -5,6 +5,10 @@ Pipeline CP2K (GPW, PBE) para sólidos e superfícies, usado no cluster GridUNES
 (fatos das builds, pegadinhas, HSE06/RI-HFXk, status dos projetos) em [SECOND_BRAIN.md](SECOND_BRAIN.md).
 Os documentos originais de cada máquina estão em `legacy/docs/`.
 
+> **`CP2K_PIPELINE.md` e `SECOND_BRAIN.md` são links para o cofre** (`../cofre/_Sources/cp2k/`, fonte única; o cofre e este
+> diretório devem ser irmãos em `$HOME`). Aparecem quebrados no GitHub ou num clone sem o cofre ao lado. Os textos estão em
+> `git@github.com:robertoramosjr/cofre.git` (privado). Receita de reinício: `cofre/02_Memory/cp2k/pipeline.md`.
+
 ```
 01_grid_convergence.py   CUTOFF / REL_CUTOFF (método 2D oficial)
 02_kmesh_convergence.py  k-mesh com CELL_OPT completo (ΔE + ΔV)
