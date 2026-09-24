@@ -1,0 +1,17 @@
+# Whitelist: this directory also holds ~100 GB of calculation data (ZrO2/, TiO2_smoke/).
+# Only code and docs are versioned.
+/*
+!/.gitignore
+!/README.md
+!/CP2K_PIPELINE.md
+!/cp2k_pipeline.md
+!/SECOND_BRAIN.md
+!/0[0-9]_*.py
+!/core/
+!/parsers/
+!/jobs/
+!/scripts/
+!/legacy/
+__pycache__/
+*.pyc
+/legacy/scripts/.bak_*/
