@@ -1,9 +1,10 @@
 # SECOND_BRAIN: contexto denso do projeto CP2K (`~/work_cp2k`)
 
 > Arquivo de trabalho para as IAs. O cofre (`~/cofre/02_Memory/cp2k/*.md`) guarda o resumo e
-> aponta para cá. **Reconstruído em 2026-09-24 na máquina `access`.** O `SECOND_BRAIN.md` original
-> ficou em `coaraci:~/work_cp2k` (sem versionamento, inacessível nesta data). As seções 6 e
-> 9b–9e do original (RI-HFXk) estão resumidas aqui a partir da nota do cofre `cp2k/tio2.md`.
+> aponta para cá. Escrito em 2026-09-24 na máquina `access`. **O SECOND_BRAIN original do coaraci
+> foi trazido pelo usuário em 2026-09-24 e está em [SECOND_BRAIN_COARACI.md](SECOND_BRAIN_COARACI.md)**
+> (fonte primária para RI-HFXk/híbridos, TiO2 e para as decisões da spec). A seção 5 abaixo lista o que
+> diverge entre as duas implementações.
 
 ## 0. Máquinas e sincronização
 - `access` (GridUNESP, login `access`): 56 nós de 56 cores, 126 GB por nó; partições `short`
@@ -40,8 +41,8 @@
 com parsers em `parsers/`, jobs em `jobs/`, `core/cp2k_blocks.py` como fonte única e `--basis`
 obrigatório.
 Validação real em 2026-09-24 (login, 2 ranks, ZrO₂ cúbico, cutoff 200–300): `run_dir` do
-`common.sh` rodou com 2 ranks reais, e o 01 mais o `parse_grid` funcionaram; ver seção 5 para
-bandas/PDOS.
+`common.sh` rodou com 2 ranks reais; 01 + parse_grid, 04 + parse_bands (gap indireto X→Γ de 3,30 eV) e
+05 + parse_pdos funcionaram.
 
 ## 3. Pegadinhas (as antigas continuam válidas)
 - `PROGRAM ENDED AT` não significa convergência. Os jobs checam `OPTIMIZATION COMPLETED`.
@@ -62,7 +63,30 @@ com R_c menor custa `erfc(ω·R_c)` da troca (30% perdidos em 2,9 Å); diagonali
 segfault ("Only RI-HFX is implemented for K-points"). O usuário foi para o **CRYSTAL** para
 bandas híbridas. Não re-testar.
 
-## 5. Projetos
+## 5. access × coaraci (registrado em 2026-09-24, a partir do SECOND_BRAIN_COARACI.md)
+- **O "2026.2" do coaraci** é um binário `cp2k.ssmp` local (só OpenMP, sem MPI), não um módulo.
+  O cluster-alvo das notas de lá ("56 cores, short/medium/long, cp2k/2026.1") **é este `access`**.
+  Respostas às perguntas abertas de lá: o lançador é o `mpiexec` do MPICH (não `srun --mpi=...`) e
+  o conda env é `cp2k_env`.
+- **Adotado do coaraci em 2026-09-24:** (a) `EXTERNAL_PRESSURE [bar] 0` explícito no CELL_OPT (o
+  default da 2026.1 é **100 bar**, conferido no schema; o 02/03 daqui relaxavam sob compressão,
+  mas nada tinha rodado); (b) otimizador BFGS até 10 átomos e LBFGS acima (item 9 da spec); (c) os
+  parsers leem só o último segmento `PROGRAM STARTED AT` (o CP2K acrescenta ao `.out`).
+- **Diferenças mantidas de propósito:** `NGRIDS 5` (lá 4); `&OUTER_SCF` no ramo OT (lá não há);
+  `MAX_SCF 300` (lá 100 para PBE, mas o PDOS do rutilo precisou de 150); critério de grid em
+  meV/átomo (lá 1e-5 Ha total, já que 1e-8 Ha do manual é inatingível por ruído de ~4e-6 Ha).
+- **Só no coaraci, não portado:** `00_basis_probe.py`, `06_bands_hybrid.py` (RI-HFXk + `.kp`
+  como chute), registro `BASES` (`--basis dzvp-molopt-sr|ccgrb-d|ccgrb-t|pob-tzvp-rev2`, GAPW),
+  `scripts/run_smoke.py`, parsers com `--json`, `check_restart_matches_input`, detecção de
+  `[max_iter]`, `&HF/&MEMORY MAX_MEMORY`, leitura do header de `.pdos` da 2026.2. Numeração: aqui
+  06/07 são slabs, então o híbrido deve entrar como `08_bands_hybrid.py`.
+- **Pegadinha de lá que vale aqui:** o `.restart` guarda `MAX_ITER` e `STEP_START_VAL`. Retomar
+  depois de bater em MAX_ITER não faz nada até aumentar o MAX_ITER **dentro do restart**. O
+  `common.sh` daqui ainda não detecta isso: o status fica eternamente `IN_PROGRESS`.
+- A spec original (`cp2k_pipeline.md`, com PARTE 4 de referências e PARTE 5 do HFX &MEMORY)
+  **continua só no coaraci**. O `CP2K_PIPELINE.md` daqui é a reconstrução.
+
+## 6. Projetos
 ### ZrO2: slabs PBE → gamma → Wulff → mapa de morfologia (ATIVO)
 - Pasta: `ZrO2/PAW_PBE/` (mapa em `ZrO2/PAW_PBE/README.md`). VASP original em `PAW_PBE/legacy/`.
 - Bulks de partida: `CONTCAR` do Etot VASP (ISIF=2 sobre a rede convergida por Stress): c a=5.115;

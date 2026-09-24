@@ -57,7 +57,9 @@ DEFAULTS = {
     "mixing_alpha": 0.4,
     "nbroyden": 8,
     # optimizers
-    "optimizer": "BFGS",
+    "optimizer": "AUTO",      # BFGS for <= lbfgs_above atoms, LBFGS above (spec item 9)
+    "lbfgs_above": 10,
+    "external_pressure": 0.0,  # bar; CP2K's CELL_OPT default is 100 bar (!)
     "max_iter": 500,
     "max_force": 0.010,       # eV/angstrom (VASP EDIFFG = -0.01)
     "pressure_tolerance": 100.0,  # bar
@@ -313,13 +315,20 @@ def build_kpoints_block(kpoints, parallel_group_size=DEFAULTS["parallel_group_si
 
 def build_motion_block(run_type: str, *, max_iter=DEFAULTS["max_iter"],
                        max_force=DEFAULTS["max_force"], optimizer=DEFAULTS["optimizer"],
-                       pressure_tolerance=DEFAULTS["pressure_tolerance"]) -> str:
+                       pressure_tolerance=DEFAULTS["pressure_tolerance"],
+                       external_pressure=DEFAULTS["external_pressure"], natoms=None) -> str:
+    """optimizer AUTO: BFGS (dense Hessian) up to DEFAULTS['lbfgs_above'] atoms,
+    LBFGS beyond. EXTERNAL_PRESSURE is always written: the CP2K default is
+    100 bar, which would relax every bulk under compression."""
     if run_type not in ("GEO_OPT", "CELL_OPT"):
         return ""
+    if optimizer == "AUTO":
+        optimizer = "LBFGS" if (natoms or 0) > DEFAULTS["lbfgs_above"] else "BFGS"
     sec = run_type
     body = [f"  &{sec}"]
     if run_type == "CELL_OPT":
-        body += ["    TYPE DIRECT_CELL_OPT", f"    PRESSURE_TOLERANCE [bar] {pressure_tolerance:g}"]
+        body += ["    TYPE DIRECT_CELL_OPT", f"    EXTERNAL_PRESSURE [bar] {external_pressure:g}",
+                 f"    PRESSURE_TOLERANCE [bar] {pressure_tolerance:g}"]
     body += [f"    OPTIMIZER {optimizer}", f"    MAX_ITER {max_iter}",
              f"    MAX_FORCE [eV*angstrom^-1] {max_force}", f"  &END {sec}"]
     return ("&MOTION\n" + "\n".join(body) + "\n"
@@ -354,7 +363,7 @@ def build_input(structure: Structure, args, *, run_type: str, kpoints,
         + build_coord_block(structure)
         + build_kind_blocks(structure, args.basis, args.potential_family)
         + "  &END SUBSYS\n&END FORCE_EVAL\n\n"
-        + build_motion_block(run_type, **(motion_kwargs or {}))
+        + build_motion_block(run_type, natoms=len(structure), **(motion_kwargs or {}))
     )
 
 

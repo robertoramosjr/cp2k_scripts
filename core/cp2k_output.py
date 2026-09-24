@@ -20,7 +20,14 @@ RE_NATOMS = re.compile(r"- Atoms:\s+(\d+)")
 
 
 def read(path) -> str:
-    return Path(path).read_text(errors="replace")
+    """Text of the LAST run in the file: CP2K appends to an existing -o file,
+    so older segments (old ABORTs, old energies) must not be parsed."""
+    text = Path(path).read_text(errors="replace")
+    i = text.rfind("PROGRAM STARTED AT")
+    if i < 0:
+        return text
+    j = text.rfind("\n", 0, i)
+    return text[j + 1:] if j >= 0 else text
 
 
 def ended(text: str) -> bool:

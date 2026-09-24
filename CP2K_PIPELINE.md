@@ -7,7 +7,9 @@
 > git, e `coaraci` estava inacessível (timeout de SSH) nesta data. A reconstrução parte de três
 > fontes: o prompt de reescrita, as notas do cofre (`02_Memory/cp2k/tio2.md`) e os problemas
 > reais encontrados no pipeline antigo desta máquina (agora em `legacy/`). **Quando o `coaraci`
-> voltar, comparar os dois lados e mesclar** (ver PARTE 3, item 6).
+> voltar, comparar os dois lados e mesclar** (ver PARTE 3, item 6). O SECOND_BRAIN do coaraci
+> chegou em 2026-09-24 ([SECOND_BRAIN_COARACI.md](SECOND_BRAIN_COARACI.md)); as divergências
+> estão em SECOND_BRAIN.md §5. A spec original ainda não chegou.
 
 ---
 
@@ -56,7 +58,7 @@ core/cp2k_output.py    leitores de output (energia, grids, ranks, convergência)
 01_grid_convergence.py --phase cutoff|relcutoff   (1.6)
 02_kmesh_convergence.py CELL_OPT completo por malha; critério duplo ΔE meV/át + ΔV %
 03_cellopt.py          CELL_OPT de produção, passo único: CELL_REF 1.15x, STRESS_TENSOR ANALYTICAL,
-                       BFGS, MAX_FORCE em eV/Å, &SCF%PRINT%RESTART ON
+                       BFGS/LBFGS, EXTERNAL_PRESSURE 0, MAX_FORCE em eV/Å, &SCF%PRINT%RESTART ON
 04_bands.py            ENERGY + &PRINT%BAND_STRUCTURE, k-mesh do 03, ADDED_MOS 10, kpath.prim
 05_pdos.py             supercélula (--supercell NX NY NZ), Γ + OT, &PRINT%PDOS COMPONENTS, NLUMO -1
 06_slab_cut.py         slabs simétricos, estequiométricos e apolares (Tasker III→II), ordenados
@@ -72,6 +74,8 @@ Regras do `core/cp2k_blocks.py`:
 - k ≠ Γ → `&DIAGONALIZATION` (STANDARD, `EPS_ADAPT 0.01`) + `&MIXING` (Broyden, α 0.4) +
   `&SMEAR ON` (FERMI_DIRAC, 300 K) + `ADDED_MOS 10` (nunca derivado do número de elétrons).
 - `&QS EXTRAPOLATION USE_GUESS`, `EPS_DEFAULT 1E-12`; `&KPOINTS PARALLEL_GROUP_SIZE -1`.
+- CELL_OPT: `EXTERNAL_PRESSURE [bar] 0` explícito (o default do CP2K é 100 bar). Otimizador
+  BFGS até 10 átomos, LBFGS acima.
 - `build_cell_block(structure, cell_ref_factor)` escreve `&CELL_REF` (fator linear nos vetores)
   só em `CELL_OPT`.
 - Tudo o que é tunável vem de `DEFAULTS` via argparse. Os únicos valores fixos ficam em `jobs/*.sh`.
