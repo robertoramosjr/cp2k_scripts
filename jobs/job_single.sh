@@ -14,6 +14,9 @@
 # Restart-safe: resubmit the same command after a walltime kill and it
 # continues from <project>-1.restart.
 
-source "$(dirname "$(readlink -f "$0")")/common.sh" 2>/dev/null || source ~/work_cp2k/jobs/common.sh
+for _c in "$(dirname "$(readlink -f "$0")")" "${CP2K_SCRIPTS:-/nonexistent}/jobs" ~/work_cp2k/jobs ~/work_cp2k/cp2k_scripts/jobs; do
+    [ -s "$_c/common.sh" ] && grep -q "^run_dir()" "$_c/common.sh" && { source "$_c/common.sh"; break; }
+done
+declare -F run_dir >/dev/null || { echo "[ERROR] jobs/common.sh not found (set CP2K_SCRIPTS=<repo>)"; exit 2; }
 
 run_dir "$(readlink -f "${1:-$SLURM_SUBMIT_DIR}")"

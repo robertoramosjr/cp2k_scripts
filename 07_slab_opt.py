@@ -93,7 +93,11 @@ def main():
     if a.bulk_cp2k:
         if None in meta["uvw_in_plane"]:
             sys.exit("ERROR: slab_meta.json has no rational [uvw]; cannot rescale.")
-        slab, strain, zscale, t_new = rescale(slab, meta, cb.read_structure(meta["bulk"]),
+        bulk_ref = Path(meta["bulk"])
+        if not bulk_ref.exists():  # path recorded on another machine: use this phase's copy
+            bulk_ref = d.resolve().parents[1] / bulk_ref.name
+            print(f"[INFO] slab_meta bulk path not found here, using {bulk_ref}")
+        slab, strain, zscale, t_new = rescale(slab, meta, cb.read_structure(bulk_ref),
                                               cb.read_structure(a.bulk_cp2k), vacuum)
     else:
         slab = set_vacuum(slab, vacuum)
