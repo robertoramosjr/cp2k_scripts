@@ -61,6 +61,7 @@ is_done() {  # is_done <input> <output>
     [ -s "$2" ] || return 1
     case "$rt" in
         GEO_OPT|CELL_OPT) grep -q "OPTIMIZATION COMPLETED" "$2" ;;
+        NEGF) grep -q "PROGRAM ENDED AT" "$2" && grep -q "NEGF run converged" "$2" ;;  # NEGF prints no total energy
         *) grep -q "PROGRAM ENDED AT" "$2" && grep -q "ENERGY| Total FORCE_EVAL" "$2" ;;
     esac
 }
