@@ -84,6 +84,7 @@ def parse_args():
     p.add_argument("--basis-set-file", default="BASIS_MOLOPT")
     p.add_argument("--potential-file", default="GTH_POTENTIALS")
     p.add_argument("--kind-overrides", default=None)
+    ig.add_open_shell_args(p)
     p.add_argument("--eps-scf", type=float, default=1.0E-6)
     p.add_argument("--max-scf", type=int, default=300)
     p.add_argument("--outer-max-scf", type=int, default=50)
@@ -208,6 +209,8 @@ def main():
         max_iter=args.max_iter, max_force=args.max_force, kpoints=[kx, ky, 1],
         basis_set_file=args.basis_set_file, potential_file=args.potential_file,
         kind_overrides=args.kind_overrides, surface_dipole=not args.no_surface_dipole,
+        uks=args.uks, multiplicity=args.multiplicity, smear=args.smear,
+        added_mos=args.added_mos, d3=args.d3,
     )
     (out / f"{args.project_name}.inp").write_text(ig.render_input(new, run_args), encoding="utf-8")
     new.to(filename=str(out / "slab_input.cif"))

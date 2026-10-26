@@ -8,8 +8,15 @@ pymatgen for structure parsing.
 
 Intended usage pattern (run from the working directory of the project):
 
-    python ~/scripts/input_generator.py --mp-id mp-390 --run-type CELL_OPT
-    python ~/scripts/input_generator.py --cif TiO2_anatase.cif --functional HSE06
+    python ~/work_cp2k/legacy/scripts/input_generator.py --mp-id mp-390 --run-type CELL_OPT
+    python ~/work_cp2k/legacy/scripts/input_generator.py --cif TiO2_anatase.cif --functional HSE06
+    python ~/work_cp2k/legacy/scripts/input_generator.py --structure POSCAR --run-type GEO_OPT \\
+        --kpoints 1 1 1 --uks --smear 300 --d3 --surface-dipole
+
+--structure is an alias of --cif; any pymatgen-readable file works (CIF,
+POSCAR/CONTCAR/*.vasp, xyz, ...), and a POSCAR with a non-standard file name
+is read with the VASP reader as a fallback. Elements, and therefore the
+BASIS_SET/POTENTIAL of every &KIND, come from the structure file itself.
 
 Requirements:
     pip install pymatgen mp-api
@@ -98,6 +105,27 @@ def build_motion_block(run_type: str, max_iter: int, max_force_ev_ang: float) ->
     return ""
 
 
+def add_open_shell_args(parser, with_added_mos: bool = True):
+    """Metallic / open-shell / adsorption knobs, shared by every legacy generator.
+    All opt-in: without them the generated input is identical to the previous
+    behaviour. with_added_mos=False for scripts that already define --added-mos."""
+    parser.add_argument("--uks", action="store_true",
+                         help="Spin-polarised run (UKS TRUE). Needed for radicals such as NH2 "
+                              "(odd electron count) and for magnetic metals.")
+    parser.add_argument("--multiplicity", type=int, default=None,
+                         help="MULTIPLICITY (2S+1); implies --uks. Default: CP2K picks 1 for an "
+                              "even and 2 for an odd electron count. With --smear the total "
+                              "magnetic moment is free to relax, so this is only the starting point.")
+    parser.add_argument("--smear", type=float, default=None, metavar="T_K",
+                         help="Fermi-Dirac smearing at T_K kelvin, for metals (e.g. 300). Forces "
+                              "DIAGONALIZATION + MIXING even at Gamma, because OT cannot use smearing.")
+    if with_added_mos:
+        parser.add_argument("--added-mos", type=int, default=None,
+                             help="ADDED_MOS (empty bands). Default 10 with --smear, 0 otherwise.")
+    parser.add_argument("--d3", action="store_true",
+                         help="Add DFT-D3(BJ) dispersion (PBE reference); recommended for adsorption.")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate a CP2K input file from a Materials Project ID or a local structure file."
@@ -105,7 +133,9 @@ def parse_args():
 
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--mp-id", type=str, help="Materials Project ID, e.g. mp-390")
-    source.add_argument("--cif", type=str, help="Path to a local structure file (CIF, POSCAR, etc.)")
+    source.add_argument("--cif", "--structure", dest="cif", type=str,
+                         help="Path to a local structure file (CIF, POSCAR, CONTCAR, xyz, etc.). "
+                              "Atomic positions are written as read; nothing is moved or reordered.")
 
     parser.add_argument("--api-key", type=str, default=None,
                          help="Materials Project API key. Defaults to $MP_API_KEY env var.")
@@ -139,6 +169,8 @@ def parse_args():
     parser.add_argument("--kind-overrides", type=str, default=None,
                          help="Path to a JSON file overriding basis/potential per element, "
                               "e.g. {\"Ti\": {\"basis_set\": \"...\", \"potential\": \"...\"}}")
+
+    add_open_shell_args(parser)
 
     # Convergence / optimizer knobs -- defaults mirror a VASP production INCAR
     # (EDIFF=1.0E-6, NELM=1500, NSW=800, EDIFFG=-0.01) where a sensible CP2K
@@ -201,7 +233,42 @@ def get_structure(mp_id: str = None, cif_path: str = None, api_key: str = None) 
     path = Path(cif_path)
     if not path.exists():
         sys.exit(f"ERROR: structure file not found: {path}")
-    return Structure.from_file(str(path))
+    try:
+        return Structure.from_file(str(path))
+    except Exception as first_error:
+        # pymatgen picks the parser from the file name; a POSCAR saved as
+        # e.g. Ti3C2_NH2.txt is not recognised, so try the VASP reader.
+        try:
+            from pymatgen.io.vasp import Poscar
+            return Poscar.from_file(str(path)).structure
+        except Exception:
+            sys.exit(f"ERROR: could not read '{path}' as a structure file "
+                     f"({type(first_error).__name__}: {first_error})")
+
+
+def print_submit_hint(target, n_points=None):
+    """Print the sbatch lines of the current jobs/ scripts: one array task per
+    point folder under `target` (n_points given) or one run directory. Nothing
+    heavy belongs on the login node, and coaraci needs the whole-node wrapper."""
+    jobs = Path(__file__).resolve().parents[2] / "jobs"
+    jobs = jobs if (jobs / "common.sh").exists() else Path("~/work_cp2k/jobs")
+    target = Path(target).resolve()
+    what = f"--array=0-{n_points - 1} {jobs}/job_scan_array.sh" if n_points else f"{jobs}/job_single.sh"
+    print("\nSubmit (restart-safe; each directory must hold exactly one .inp):")
+    print(f"  access : sbatch {what} {target}")
+    print(f"  coaraci: {jobs}/sbatch_coaraci.sh {what} {target}")
+
+
+def warn_oversampled_kmesh(structure: Structure, kpoints, max_length_angstrom: float = 40.0):
+    """Warn when k_i x |a_i| is large: a supercell or slab left at the default
+    6x6x6 mesh costs orders of magnitude more than it needs (use 1 along vacuum)."""
+    big = [(axis, k, length) for axis, k, length in zip("abc", kpoints, structure.lattice.abc)
+           if k * length > max_length_angstrom]
+    if big:
+        detail = ", ".join(f"{axis}: {k} x {length:.1f} A" for axis, k, length in big)
+        print(f"WARNING: k-mesh {kpoints[0]}x{kpoints[1]}x{kpoints[2]} is very dense for this cell "
+              f"({detail}). For a supercell/slab pass --kpoints (1 1 1 = Gamma only, or 1 along "
+              f"the vacuum direction).", file=sys.stderr)
 
 
 def load_kind_overrides(path):
@@ -360,7 +427,8 @@ def build_kpoints_block(kpoints) -> str:
 def build_scf_block(kpoints, disable_wfn_restart: bool,
                      eps_scf: float = 1.0E-6, max_scf: int = 300,
                      outer_max_scf: int = 50, added_mos: int = 0,
-                     wfn_restart_file: str = None, mixing_alpha: float = 0.4) -> str:
+                     wfn_restart_file: str = None, mixing_alpha: float = 0.4,
+                     smear_temp: float = None) -> str:
     """Build the &SCF block, choosing the minimizer CP2K actually supports.
 
     CP2K's OT (Orbital Transformation) minimizer only supports Gamma-point
@@ -398,7 +466,17 @@ def build_scf_block(kpoints, disable_wfn_restart: bool,
         scf_guess = "ATOMIC"
         wfn_line = ""
 
-    if is_gamma_only(kpoints):
+    # smear_temp: Fermi-Dirac smearing (metals). OT has no fractional
+    # occupations, so smearing always takes the DIAGONALIZATION branch below,
+    # also at Gamma (in which case &KPOINTS is simply not written).
+    smear_block = (
+        "      &SMEAR\n"
+        "        METHOD FERMI_DIRAC\n"
+        f"        ELECTRONIC_TEMPERATURE [K] {smear_temp}\n"
+        "      &END SMEAR\n"
+    ) if smear_temp is not None else ""
+
+    if is_gamma_only(kpoints) and smear_temp is None:
         return (
             "&SCF\n"
             f"      EPS_SCF {eps_scf}\n"
@@ -439,6 +517,7 @@ def build_scf_block(kpoints, disable_wfn_restart: bool,
         "        BETA 1.5\n"
         "        NBROYDEN 8\n"
         "      &END MIXING\n"
+        f"{smear_block}"
         "      &OUTER_SCF\n"
         f"        MAX_SCF {outer_max_scf}\n"
         f"        EPS_SCF {eps_scf}\n"
@@ -468,6 +547,38 @@ def total_valence_electrons(structure, overrides: dict) -> int:
     return total
 
 
+def add_d3(xc_block: str) -> str:
+    """Append a DFT-D3(BJ) &VDW_POTENTIAL (PBE reference) to an &XC block.
+    Same block as scripts/make_junction_input.py."""
+    head, tail = xc_block.rsplit("&END XC", 1)
+    return (
+        head
+        + "  &VDW_POTENTIAL\n"
+          "    POTENTIAL_TYPE PAIR_POTENTIAL\n"
+          "    &PAIR_POTENTIAL\n"
+          "      TYPE DFTD3(BJ)\n"
+          "      PARAMETER_FILE_NAME dftd3.dat\n"
+          "      REFERENCE_FUNCTIONAL PBE\n"
+          "    &END PAIR_POTENTIAL\n"
+          "  &END VDW_POTENTIAL\n"
+        + "&END XC" + tail
+    )
+
+
+def build_spin_lines(structure: Structure, overrides: dict, uks: bool, multiplicity) -> str:
+    """UKS / MULTIPLICITY lines for &DFT. A given multiplicity implies UKS and
+    must match the parity of the valence-electron count (the CP2K analog of
+    checking NELECT against MAGMOM), otherwise CP2K would abort at startup."""
+    if multiplicity is not None:
+        n_electrons = total_valence_electrons(structure, overrides)
+        if multiplicity < 1 or (n_electrons - (multiplicity - 1)) % 2:
+            sys.exit(f"ERROR: MULTIPLICITY {multiplicity} is impossible with {n_electrons} "
+                     f"valence electrons (parity mismatch); an odd count needs an even "
+                     f"multiplicity (2, 4, ...) and an even count an odd one (1, 3, ...).")
+    return ("    UKS TRUE\n" if (uks or multiplicity is not None) else "") + \
+           (f"    MULTIPLICITY {multiplicity}\n" if multiplicity is not None else "")
+
+
 def render_input(structure: Structure, args) -> str:
     use_admm = args.functional in ("PBE0", "HSE06")
     overrides = load_kind_overrides(args.kind_overrides)
@@ -481,11 +592,22 @@ def render_input(structure: Structure, args) -> str:
     max_force = getattr(args, "max_force", 0.010)
     mixing_alpha = getattr(args, "mixing_alpha", 0.4)
     surface_dipole = getattr(args, "surface_dipole", False)
+    multiplicity = getattr(args, "multiplicity", None)
+    uks = getattr(args, "uks", False) or multiplicity is not None
+    smear = getattr(args, "smear", None)
+    added_mos = getattr(args, "added_mos", None)
+    if added_mos is None:
+        added_mos = 10 if smear is not None else 0
+    d3 = getattr(args, "d3", False)
+
+    spin_lines = build_spin_lines(structure, overrides, uks, multiplicity)
 
     cell_block = build_cell_block(structure)
     coord_block = build_coord_block(structure)
     kind_blocks = build_kind_blocks(structure, args.basis_family, args.functional, overrides, use_admm)
     xc_block = build_xc_block(args.functional)
+    if d3:
+        xc_block = add_d3(xc_block)
     admm_block = build_admm_block(args.functional)
     motion_block = build_motion_block(args.run_type, max_iter, max_force)
 
@@ -509,12 +631,14 @@ def render_input(structure: Structure, args) -> str:
     # keep it ON for GEO_OPT/CELL_OPT where it speeds up SCF on resume.
     scf_block = build_scf_block(args.kpoints, disable_wfn_restart=is_one_shot,
                                  eps_scf=eps_scf, max_scf=max_scf, outer_max_scf=outer_max_scf,
-                                 mixing_alpha=mixing_alpha)
+                                 mixing_alpha=mixing_alpha, added_mos=added_mos,
+                                 smear_temp=smear)
     kpoints_block = build_kpoints_block(args.kpoints)
     dipole_lines = (
         "    SURFACE_DIPOLE_CORRECTION TRUE\n"
         "    SURF_DIP_DIR Z\n"
     ) if surface_dipole else ""
+    dipole_lines = spin_lines + dipole_lines
 
     template = f"""&GLOBAL
   PROJECT  {args.project_name}
@@ -562,6 +686,24 @@ def main():
     print(f"Structure: {structure.composition.reduced_formula} "
           f"({len(structure)} sites, functional={args.functional}, run_type={args.run_type})")
     print(f"CP2K input written to: {output_path}")
+
+    # Show what was read from the structure file and which pseudopotential
+    # each element got, so it can be checked against the local data files.
+    overrides = load_kind_overrides(args.kind_overrides)
+    print("Elements read from the structure -> basis / pseudopotential:")
+    for element in sorted({s.specie.symbol for s in structure.sites}):
+        n = sum(1 for s in structure.sites if s.specie.symbol == element)
+        block = [l.split(None, 1)[1] for l in
+                 build_kind_blocks(structure, args.basis_family, args.functional, overrides,
+                                    args.functional in ("PBE0", "HSE06")).split("&KIND ")
+                 if l.startswith(element + "\n")][0]
+        basis = next(l.split()[1] for l in block.splitlines() if l.strip().startswith("BASIS_SET ")
+                     and "AUX_FIT" not in l)
+        pot = next(l.split()[1] for l in block.splitlines() if l.strip().startswith("POTENTIAL "))
+        print(f"  {element:<3} x{n:<4} {basis:<26} {pot}")
+    print(f"Valence electrons: {total_valence_electrons(structure, overrides)}")
+    warn_oversampled_kmesh(structure, args.kpoints)
+    print_submit_hint(output_path.parent)
 
 
 if __name__ == "__main__":

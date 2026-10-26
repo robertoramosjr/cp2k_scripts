@@ -14,7 +14,7 @@ densest mesh tested -- this is the CP2K analog of watching the VASP relaxed
 volume stabilize across a KPOINTS scan.
 
 Usage:
-    python ~/scripts/parse_kmesh_stress_convergence.py \\
+    python ~/work_cp2k/legacy/scripts/parse_kmesh_stress_convergence.py \\
         --scan-dir kmesh_stress_convergence --n-atoms 6 \\
         --energy-threshold-mev-atom 1.0 --volume-threshold-pct 0.5
 """
@@ -48,6 +48,9 @@ def parse_args():
     parser.add_argument("--volume-threshold-pct", type=float, default=0.5,
                          help="Relaxed-volume convergence threshold, in percent, "
                               "relative to the densest mesh tested.")
+    parser.add_argument("--energy-only", action="store_true",
+                         help="Fixed-cell scan (kmesh_stress_convergence.py --run-type ENERGY_FORCE/"
+                              "GEO_OPT, e.g. a slab): compare energies only, ignore the cell volume.")
     parser.add_argument("--output-plot", type=str, default="kmesh_stress_convergence.png")
     return parser.parse_args()
 
@@ -103,9 +106,12 @@ def main():
             continue
 
         mesh = None
-        m = KMESH_PATTERN.search(inp_files[0].read_text())
+        inp_text = inp_files[0].read_text()
+        m = KMESH_PATTERN.search(inp_text)
         if m:
             mesh = tuple(int(x) for x in m.groups())
+        elif "&KPOINTS" not in inp_text:
+            mesh = (1, 1, 1)  # Gamma-only inputs carry no &KPOINTS section at all
         if mesh is None:
             print(f"WARNING: could not read k-mesh from {inp_files[0]}, skipping.")
             continue
@@ -115,7 +121,9 @@ def main():
             print(f"WARNING: could not parse total energy in {out_files[0]}, skipping.")
             continue
 
-        if not restart_files:
+        if args.energy_only:
+            volume = None
+        elif not restart_files:
             print(f"WARNING: no .restart file in {run_dir} -- relaxation may not have "
                   f"produced a checkpoint yet (still running?). Skipping volume for this point.")
             volume = None
@@ -168,7 +176,7 @@ def main():
         v = r["volume_ang3"]
         dv = (100.0 * (v - v_ref) / v_ref) if (v is not None and v_ref is not None) else None
         e_ok = abs(de) <= args.energy_threshold_mev_atom
-        v_ok = (dv is not None) and (abs(dv) <= args.volume_threshold_pct)
+        v_ok = args.energy_only or ((dv is not None) and (abs(dv) <= args.volume_threshold_pct))
         if e_ok and v_ok:
             if candidate is None:
                 candidate = label
@@ -177,12 +185,16 @@ def main():
     if candidate is not None:
         recommended = candidate
 
+    volume_clause = "" if args.energy_only else f" AND {args.volume_threshold_pct}% volume"
     print(f"\nRecommended k-mesh (least dense mesh that stays within {args.energy_threshold_mev_atom} "
-          f"meV/atom AND {args.volume_threshold_pct}% volume of the densest mesh tested, all the way "
+          f"meV/atom{volume_clause} of the densest mesh tested, all the way "
           f"up to it): {recommended}")
     print("This is the mesh to carry forward into the production GEO_OPT ('Etot') step.")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+    if args.energy_only:
+        fig, ax1 = plt.subplots(1, 1, figsize=(5, 4))
+    else:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
     ax1.plot(labels, delta_mev_atom, marker="o", color="tab:blue")
     ax1.axhline(args.energy_threshold_mev_atom, color="gray", linestyle="--", linewidth=1)
     ax1.axhline(-args.energy_threshold_mev_atom, color="gray", linestyle="--", linewidth=1)
@@ -191,14 +203,15 @@ def main():
     ax1.set_title("Relaxed energy convergence")
     ax1.tick_params(axis="x", rotation=45)
 
-    dv_plot = [dv if dv is not None else float("nan") for dv in delta_vol_pct]
-    ax2.plot(labels, dv_plot, marker="o", color="tab:orange")
-    ax2.axhline(args.volume_threshold_pct, color="gray", linestyle="--", linewidth=1)
-    ax2.axhline(-args.volume_threshold_pct, color="gray", linestyle="--", linewidth=1)
-    ax2.set_xlabel("k-mesh")
-    ax2.set_ylabel("ΔVolume relative to densest mesh (%)")
-    ax2.set_title("Relaxed volume convergence")
-    ax2.tick_params(axis="x", rotation=45)
+    if not args.energy_only:
+        dv_plot = [dv if dv is not None else float("nan") for dv in delta_vol_pct]
+        ax2.plot(labels, dv_plot, marker="o", color="tab:orange")
+        ax2.axhline(args.volume_threshold_pct, color="gray", linestyle="--", linewidth=1)
+        ax2.axhline(-args.volume_threshold_pct, color="gray", linestyle="--", linewidth=1)
+        ax2.set_xlabel("k-mesh")
+        ax2.set_ylabel("ΔVolume relative to densest mesh (%)")
+        ax2.set_title("Relaxed volume convergence")
+        ax2.tick_params(axis="x", rotation=45)
 
     fig.tight_layout()
     fig.savefig(args.output_plot, dpi=150)

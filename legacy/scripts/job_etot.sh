@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED legacy job (access-only: fixed 8-32 tasks, TiO2 names, old e-mail). Use ~/work_cp2k/jobs/ instead:
+#   access : sbatch [--array=0-N-1] jobs/job_scan_array.sh DIR   |   sbatch jobs/job_single.sh RUN_DIR
+#   coaraci: jobs/sbatch_coaraci.sh (whole node, 48 cores, par48-x) -- this file would break that rule.
 #SBATCH -t 5-00:00:00
 #SBATCH -N 1
 #SBATCH -n 28

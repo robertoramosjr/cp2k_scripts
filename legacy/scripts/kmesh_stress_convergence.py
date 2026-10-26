@@ -22,7 +22,7 @@ Order of operations (same dependency chain as ENCUT->KPOINTS in VASP):
        input_generator.py --run-type GEO_OPT
 
 Usage:
-    python ~/scripts/kmesh_stress_convergence.py --mp-id mp-390 \\
+    python ~/work_cp2k/legacy/scripts/kmesh_stress_convergence.py --mp-id mp-390 \\
         --project-name TiO2_anatase --cutoff 600 --k-min 2 --k-max 8 --k-step 2
 """
 
@@ -41,7 +41,8 @@ def parse_args():
 
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--mp-id", type=str, help="Materials Project ID, e.g. mp-390")
-    source.add_argument("--cif", type=str, help="Path to a local structure file (CIF, POSCAR, etc.)")
+    source.add_argument("--cif", "--structure", dest="cif", type=str,
+                         help="Path to a local structure file (CIF, POSCAR, CONTCAR, xyz, etc.)")
 
     parser.add_argument("--api-key", type=str, default=None,
                          help="Materials Project API key. Defaults to $MP_API_KEY env var.")
@@ -61,6 +62,7 @@ def parse_args():
     parser.add_argument("--basis-set-file", type=str, default="BASIS_MOLOPT")
     parser.add_argument("--potential-file", type=str, default="GTH_POTENTIALS")
     parser.add_argument("--kind-overrides", type=str, default=None)
+    ig.add_open_shell_args(parser)
 
     # Convergence / optimizer knobs -- same VASP-INCAR-derived defaults as
     # input_generator.py (EDIFF, NELM, NSW, EDIFFG). See build_scf_block's
@@ -74,6 +76,15 @@ def parse_args():
                          help="Max CELL_OPT optimizer steps (mirrors VASP's NSW).")
     parser.add_argument("--max-force", type=float, default=0.010,
                          help="Force convergence in eV/angstrom (mirrors VASP's EDIFFG).")
+
+    parser.add_argument("--run-type", type=str, default="CELL_OPT",
+                         choices=["CELL_OPT", "GEO_OPT", "ENERGY_FORCE"],
+                         help="CELL_OPT (default): bulk, relaxed energy AND volume per mesh. "
+                              "ENERGY_FORCE: fixed-cell single points, the right choice for a slab / "
+                              "supercell with vacuum (a cell relaxation would also relax the vacuum); "
+                              "parse with --energy-only. GEO_OPT: fixed cell, relaxed ions.")
+    parser.add_argument("--surface-dipole", action="store_true",
+                         help="Add SURFACE_DIPOLE_CORRECTION along Z (slabs), as in the production run.")
 
     parser.add_argument("--k-min", type=int, default=2, help="Smallest isotropic mesh N (NxNxN).")
     parser.add_argument("--k-max", type=int, default=8, help="Largest isotropic mesh N (NxNxN).")
@@ -107,9 +118,12 @@ def main():
 
     meshes = build_mesh_list(args)
     print(f"Structure: {structure.composition.reduced_formula} ({len(structure)} sites)")
-    print(f"Generating {len(meshes)} full CELL_OPT (stress) inputs in '{out_root}/'")
-    print("(each one relaxes cell + ions at its own k-mesh -- this is the expensive, "
-          "rigorous methodology, not a single-point scan)\n")
+    if args.run_type == "CELL_OPT":
+        print(f"Generating {len(meshes)} full CELL_OPT (stress) inputs in '{out_root}/'")
+        print("(each one relaxes cell + ions at its own k-mesh -- this is the expensive, "
+              "rigorous methodology, not a single-point scan)\n")
+    else:
+        print(f"Generating {len(meshes)} {args.run_type} inputs (fixed cell) in '{out_root}/'\n")
 
     for kx, ky, kz in meshes:
         tag = f"k{kx}-{ky}-{kz}"
@@ -122,7 +136,7 @@ def main():
         # in a second place.
         run_args = argparse.Namespace(
             project_name=project_name,
-            run_type="CELL_OPT",
+            run_type=args.run_type,
             functional=args.functional,
             basis_family=args.basis_family,
             cutoff=args.cutoff,
@@ -138,6 +152,8 @@ def main():
             basis_set_file=args.basis_set_file,
             potential_file=args.potential_file,
             kind_overrides=args.kind_overrides,
+            uks=args.uks, multiplicity=args.multiplicity, smear=args.smear,
+            added_mos=args.added_mos, d3=args.d3, surface_dipole=args.surface_dipole,
         )
         input_text = ig.render_input(structure, run_args)
         input_path = run_dir / f"{project_name}.inp"
@@ -145,11 +161,11 @@ def main():
         print(f"  {tag:<12} -> {input_path}")
 
     print(f"\nAtoms in cell (needed later for meV/atom normalization): {len(structure)}")
-    print("Run each with:")
-    print(f"  sbatch ~/scripts/job_kmesh_stress_convergence.sh {out_root}")
+    ig.print_submit_hint(out_root, len(meshes))
     print("\nThen parse with:")
-    print(f"  python ~/scripts/parse_kmesh_stress_convergence.py --scan-dir {out_root} "
-          f"--n-atoms {len(structure)}")
+    print(f"  python {Path(__file__).resolve().parent / 'parse_kmesh_stress_convergence.py'} "
+          f"--scan-dir {out_root} --n-atoms {len(structure)}"
+          + ("" if args.run_type == "CELL_OPT" else " --energy-only"))
 
 
 if __name__ == "__main__":

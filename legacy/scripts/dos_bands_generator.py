@@ -21,7 +21,7 @@ cell/orientation -- is what gets written into &CELL/&COORD, because the
 k-path coordinates are only meaningful relative to it.
 
 Usage:
-    python ~/scripts/dos_bands_generator.py --cif TiO2_etot_relaxed.cif \\
+    python ~/work_cp2k/legacy/scripts/dos_bands_generator.py --cif TiO2_etot_relaxed.cif \\
         --project-name TiO2_dos_bands --cutoff 600 --kpoints 6 6 6 \\
         --added-mos 20 --wfn-restart TiO2_etot-RESTART.wfn
 """
@@ -43,7 +43,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate a combined DOS + band-structure CP2K input."
     )
-    parser.add_argument("--cif", type=str, required=True,
+    parser.add_argument("--cif", "--structure", dest="cif", type=str, required=True,
                          help="Path to the RELAXED structure (e.g. from extract_relaxed_structure.py).")
     parser.add_argument("--project-name", type=str, default="dos_bands")
     parser.add_argument("--functional", type=str, default="PBE",
@@ -70,6 +70,7 @@ def parse_args():
     parser.add_argument("--basis-set-file", type=str, default="BASIS_MOLOPT")
     parser.add_argument("--potential-file", type=str, default="GTH_POTENTIALS")
     parser.add_argument("--kind-overrides", type=str, default=None)
+    ig.add_open_shell_args(parser, with_added_mos=False)
 
     parser.add_argument("--eps-scf", type=float, default=1.0E-6)
     parser.add_argument("--max-scf", type=int, default=300)
@@ -177,6 +178,7 @@ def main():
             basis_set_file=args.basis_set_file,
             potential_file=args.potential_file,
             kind_overrides=args.kind_overrides,
+            uks=args.uks, multiplicity=args.multiplicity, smear=args.smear, d3=args.d3,
         )
         input_text = ig.render_input(structure, verify_args)
         output_path = Path(args.output) if args.output else Path.cwd() / f"{verify_project}.inp"
@@ -215,10 +217,13 @@ def main():
     kind_blocks = ig.build_kind_blocks(structure, args.basis_family, args.functional,
                                         overrides, use_admm=(args.functional in ("PBE0", "HSE06")))
     xc_block = ig.build_xc_block(args.functional)
+    if args.d3:
+        xc_block = ig.add_d3(xc_block)
+    spin_lines = ig.build_spin_lines(structure, overrides, args.uks, args.multiplicity)
     scf_block = ig.build_scf_block(
         dos_kpoints, disable_wfn_restart=True,  # one-shot ENERGY run, no continuation needed
         eps_scf=args.eps_scf, max_scf=args.max_scf, outer_max_scf=args.outer_max_scf,
-        added_mos=added_mos, wfn_restart_file=args.wfn_restart,
+        added_mos=added_mos, wfn_restart_file=args.wfn_restart, smear_temp=args.smear,
     )
 
     kpoint_set_blocks = build_kpoint_set_blocks(kpath, args.band_points)
@@ -236,7 +241,7 @@ def main():
   &DFT
     BASIS_SET_FILE_NAME  {args.basis_set_file}
     POTENTIAL_FILE_NAME  {args.potential_file}
-    &QS
+{spin_lines}    &QS
       METHOD GPW
       EPS_DEFAULT 1.0E-12
     &END QS
@@ -278,6 +283,7 @@ def main():
     print(f"Band path: {' -> '.join(' -> '.join(sanitize_label(l) for l in b) for b in kpath.kpath['path'])}")
     print(f"CP2K input written to: {output_path}")
     print(f"PDOS files: <project>-k*-*.pdos ; band structure: {args.project_name}.bs")
+    ig.print_submit_hint(output_path.parent)
 
 
 if __name__ == "__main__":

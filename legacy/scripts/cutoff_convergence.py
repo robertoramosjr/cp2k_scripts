@@ -14,10 +14,10 @@ scan to keep it cheap -- CUTOFF affects the real-space integration grid and
 is largely decoupled from k-point sampling.
 
 Usage:
-    python ~/scripts/cutoff_convergence.py --mp-id mp-390 \\
+    python ~/work_cp2k/legacy/scripts/cutoff_convergence.py --mp-id mp-390 \\
         --project-name TiO2_anatase --cutoff-min 200 --cutoff-max 800 --cutoff-step 100
 
-    python ~/scripts/cutoff_convergence.py --cif TiO2_anatase.cif \\
+    python ~/work_cp2k/legacy/scripts/cutoff_convergence.py --cif TiO2_anatase.cif \\
         --project-name TiO2_anatase --cutoff-list "200,300,400,500,600,800,1000"
 """
 
@@ -36,7 +36,8 @@ def parse_args():
 
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--mp-id", type=str, help="Materials Project ID, e.g. mp-390")
-    source.add_argument("--cif", type=str, help="Path to a local structure file (CIF, POSCAR, etc.)")
+    source.add_argument("--cif", "--structure", dest="cif", type=str,
+                         help="Path to a local structure file (CIF, POSCAR, CONTCAR, xyz, etc.)")
 
     parser.add_argument("--api-key", type=str, default=None,
                          help="Materials Project API key. Defaults to $MP_API_KEY env var.")
@@ -54,6 +55,10 @@ def parse_args():
     parser.add_argument("--basis-set-file", type=str, default="BASIS_MOLOPT")
     parser.add_argument("--potential-file", type=str, default="GTH_POTENTIALS")
     parser.add_argument("--kind-overrides", type=str, default=None)
+
+    # Metallic / open-shell knobs, same meaning as in input_generator.py. Opt-in:
+    # without them the scan is Gamma OT, closed shell, as before.
+    ig.add_open_shell_args(parser)
 
     # Convergence knobs -- same VASP-INCAR-derived defaults as input_generator.py
     # (EDIFF, NELM, AMIX). No --max-iter/--max-force here: this scan is
@@ -74,8 +79,21 @@ def parse_args():
                          help='Explicit CUTOFF values, e.g. "200,300,400,600,800". '
                               'Overrides --cutoff-min/--cutoff-max/--cutoff-step.')
 
-    parser.add_argument("--output-dir", type=str, default="cutoff_convergence",
-                         help="Root directory where per-cutoff subfolders are created.")
+    # Second phase: REL_CUTOFF scan at the CUTOFF chosen in the first one.
+    parser.add_argument("--scan", choices=["cutoff", "relcutoff"], default="cutoff",
+                         help="cutoff: vary CUTOFF at fixed --rel-cutoff (first phase). "
+                              "relcutoff: vary REL_CUTOFF (--rel-cutoff-list) at the fixed "
+                              "--cutoff taken from the first phase.")
+    parser.add_argument("--cutoff", type=int, default=None,
+                         help="Fixed CUTOFF (Ry) for --scan relcutoff: the value recommended by "
+                              "parse_cutoff_convergence.py after the CUTOFF scan.")
+    parser.add_argument("--rel-cutoff-list", type=str, default="20,30,40,50,60,80,100",
+                         help='REL_CUTOFF values (Ry) for --scan relcutoff, e.g. "20,30,40,60,80,100".')
+
+    parser.add_argument("--output-dir", type=str, default=None,
+                         help="Root directory where per-point subfolders are created. Default: "
+                              "cutoff_convergence (--scan cutoff) or relcutoff_convergence "
+                              "(--scan relcutoff).")
 
     return parser.parse_args()
 
@@ -87,8 +105,11 @@ def build_cutoff_list(args):
 
 
 def render_scan_input(cell_block, coord_block, kind_blocks, xc_block, args,
-                       project_name, cutoff):
+                       project_name, cutoff, spin_lines="", rel_cutoff=None):
     kx, ky, kz = args.kpoints
+    if rel_cutoff is None:
+        rel_cutoff = args.rel_cutoff
+    added_mos = args.added_mos if args.added_mos is not None else (10 if args.smear is not None else 0)
     return f"""&GLOBAL
   PROJECT  {project_name}
   RUN_TYPE ENERGY_FORCE
@@ -100,19 +121,20 @@ def render_scan_input(cell_block, coord_block, kind_blocks, xc_block, args,
   &DFT
     BASIS_SET_FILE_NAME  {args.basis_set_file}
     POTENTIAL_FILE_NAME  {args.potential_file}
-    &QS
+{spin_lines}    &QS
       METHOD GPW
       EPS_DEFAULT 1.0E-12
     &END QS
     &MGRID
       CUTOFF {cutoff}
-      REL_CUTOFF {args.rel_cutoff}
+      REL_CUTOFF {rel_cutoff}
       NGRIDS 5
     &END MGRID
     {xc_block}
     {ig.build_scf_block([kx, ky, kz], disable_wfn_restart=True,
                          eps_scf=args.eps_scf, max_scf=args.max_scf,
-                         outer_max_scf=args.outer_max_scf, mixing_alpha=args.mixing_alpha)}
+                         outer_max_scf=args.outer_max_scf, mixing_alpha=args.mixing_alpha,
+                         added_mos=added_mos, smear_temp=args.smear)}
 {ig.build_kpoints_block([kx, ky, kz])}  &END DFT
   &SUBSYS
     {cell_block}
@@ -134,37 +156,55 @@ def main():
         structure, args.basis_family, args.functional, overrides, use_admm=False
     )
     xc_block = ig.build_xc_block(args.functional)
+    if args.d3:
+        xc_block = ig.add_d3(xc_block)
+    spin_lines = ig.build_spin_lines(structure, overrides, args.uks, args.multiplicity)
 
-    out_root = Path(args.output_dir)
+    rel_scan = args.scan == "relcutoff"
+    out_root = Path(args.output_dir or ("relcutoff_convergence" if rel_scan else "cutoff_convergence"))
     out_root.mkdir(parents=True, exist_ok=True)
 
-    cutoffs = build_cutoff_list(args)
-    print(f"Structure: {structure.composition.reduced_formula} ({len(structure)} sites)")
-    print(f"Fixed k-mesh for this scan: {args.kpoints[0]}x{args.kpoints[1]}x{args.kpoints[2]}, "
-          f"REL_CUTOFF={args.rel_cutoff}")
-    print(f"Generating {len(cutoffs)} cutoff convergence inputs in '{out_root}/'\n")
+    if rel_scan:
+        if args.cutoff is None:
+            sys.exit("ERROR: --scan relcutoff needs --cutoff (the CUTOFF recommended by "
+                     "parse_cutoff_convergence.py after the CUTOFF scan).")
+        # (tag, CUTOFF, REL_CUTOFF) per point
+        points = [(f"relcutoff{r}", args.cutoff, r) for r in
+                  (int(x) for x in args.rel_cutoff_list.split(","))]
+        print(f"Structure: {structure.composition.reduced_formula} ({len(structure)} sites)")
+        print(f"Fixed k-mesh for this scan: {args.kpoints[0]}x{args.kpoints[1]}x{args.kpoints[2]}, "
+              f"CUTOFF={args.cutoff}")
+    else:
+        points = [(f"cutoff{c}", c, args.rel_cutoff) for c in build_cutoff_list(args)]
+        print(f"Structure: {structure.composition.reduced_formula} ({len(structure)} sites)")
+        print(f"Fixed k-mesh for this scan: {args.kpoints[0]}x{args.kpoints[1]}x{args.kpoints[2]}, "
+              f"REL_CUTOFF={args.rel_cutoff}")
+    print(f"Generating {len(points)} {args.scan} convergence inputs in '{out_root}/'\n")
 
-    for cutoff in cutoffs:
-        tag = f"cutoff{cutoff}"
+    for tag, cutoff, rel_cutoff in points:
         run_dir = out_root / tag
         run_dir.mkdir(exist_ok=True)
         project_name = f"{args.project_name}_{tag}"
 
         input_text = render_scan_input(
-            cell_block, coord_block, kind_blocks, xc_block, args, project_name, cutoff
+            cell_block, coord_block, kind_blocks, xc_block, args, project_name, cutoff,
+            spin_lines=spin_lines, rel_cutoff=rel_cutoff,
         )
         input_path = run_dir / f"{project_name}.inp"
         input_path.write_text(input_text, encoding="utf-8")
         print(f"  {tag:<14} -> {input_path}")
 
     print(f"\nAtoms in cell (needed later for meV/atom normalization): {len(structure)}")
-    print("Run each with, e.g.:")
-    print(f'  for d in {out_root}/*/; do (cd "$d" && cp2k.psmp -i *.inp -o *.inp.out); done')
+    ig.print_submit_hint(out_root, len(points))
     print("\nThen parse with:")
-    print(f"  python ~/scripts/parse_cutoff_convergence.py --scan-dir {out_root} "
-          f"--n-atoms {len(structure)}")
-    print("\nOnce CUTOFF is converged, feed it into kpoint_convergence.py via --cutoff "
-          "to run the k-mesh scan on top of it.")
+    print(f"  python {Path(__file__).resolve().parent / 'parse_cutoff_convergence.py'} "
+          f"--scan {args.scan} --scan-dir {out_root} --n-atoms {len(structure)}")
+    if rel_scan:
+        print("\nOnce REL_CUTOFF is converged, use the pair (--cutoff, --rel-cutoff) in the "
+              "next steps (kmesh_stress_convergence.py, slab_generator.py, ...).")
+    else:
+        print("\nOnce CUTOFF is converged, run the REL_CUTOFF scan at that value: "
+              "--scan relcutoff --cutoff <recommended>.")
 
 
 if __name__ == "__main__":

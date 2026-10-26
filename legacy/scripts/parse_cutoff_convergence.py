@@ -8,7 +8,7 @@ E vs CUTOFF, and suggests a converged (cost-efficient) cutoff -- the CP2K
 equivalent of a VASP ENCUT convergence plot.
 
 Usage:
-    python ~/scripts/parse_cutoff_convergence.py \\
+    python ~/work_cp2k/legacy/scripts/parse_cutoff_convergence.py \\
         --scan-dir cutoff_convergence --n-atoms 6 --threshold-mev-atom 1.0
 """
 
@@ -23,22 +23,30 @@ import matplotlib.pyplot as plt  # noqa: E402
 ENERGY_PATTERN = re.compile(r"(?m)^\s*ENERGY\|\s+Total FORCE_EVAL.*\s(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$")
 # Anchored at line start so it does NOT match "REL_CUTOFF   60"
 CUTOFF_PATTERN = re.compile(r"(?m)^\s*CUTOFF\s+(\d+)")
+REL_CUTOFF_PATTERN = re.compile(r"(?m)^\s*REL_CUTOFF\s+(\d+)")
 
 HARTREE_TO_MEV = 27211.386245988
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Parse and plot a CP2K MGRID CUTOFF convergence scan."
+        description="Parse and plot a CP2K MGRID CUTOFF or REL_CUTOFF convergence scan."
     )
-    parser.add_argument("--scan-dir", type=str, default="cutoff_convergence",
-                         help="Root directory produced by cutoff_convergence.py")
+    parser.add_argument("--scan", choices=["cutoff", "relcutoff"], default="cutoff",
+                         help="Which scan was run (cutoff_convergence.py --scan ...).")
+    parser.add_argument("--scan-dir", type=str, default=None,
+                         help="Root directory produced by cutoff_convergence.py. Default: "
+                              "cutoff_convergence or relcutoff_convergence, per --scan.")
     parser.add_argument("--n-atoms", type=int, required=True,
                          help="Number of atoms in the cell (for the meV/atom criterion).")
     parser.add_argument("--threshold-mev-atom", type=float, default=1.0,
                          help="Convergence threshold in meV/atom relative to the highest cutoff.")
-    parser.add_argument("--output-plot", type=str, default="cutoff_convergence.png")
-    return parser.parse_args()
+    parser.add_argument("--output-plot", type=str, default=None,
+                         help="Default: <scan>_convergence.png")
+    args = parser.parse_args()
+    args.scan_dir = args.scan_dir or f"{args.scan}_convergence"
+    args.output_plot = args.output_plot or f"{args.scan}_convergence.png"
+    return args
 
 
 def extract_energy_hartree(out_file: Path):
@@ -52,8 +60,12 @@ def scf_converged(out_file: Path):
     # ENERGY| line with whatever unconverged density it has. Require the
     # explicit outer-SCF convergence marker, or a bad point would silently
     # end up in the convergence curve with no indication anything was wrong.
+    # Accept the inner-loop marker too (diagonalization runs may not print the
+    # outer one), but never a run that says it did NOT converge.
     text = out_file.read_text(errors="ignore")
-    return "outer SCF loop converged" in text
+    if "SCF run NOT converged" in text:
+        return False
+    return "outer SCF loop converged" in text or "SCF run converged" in text
 
 
 def main():
@@ -62,7 +74,8 @@ def main():
     if not scan_root.exists():
         raise SystemExit(f"ERROR: scan directory not found: {scan_root}")
 
-    results = []  # list of (cutoff, energy_hartree)
+    label = "REL_CUTOFF" if args.scan == "relcutoff" else "CUTOFF"
+    results = []  # list of (cutoff or rel_cutoff, energy_hartree)
     for run_dir in sorted(scan_root.iterdir()):
         if not run_dir.is_dir():
             continue
@@ -84,11 +97,12 @@ def main():
         inp_files = list(run_dir.glob("*.inp"))
         cutoff = None
         if inp_files:
-            m = CUTOFF_PATTERN.search(inp_files[0].read_text())
+            pattern = REL_CUTOFF_PATTERN if args.scan == "relcutoff" else CUTOFF_PATTERN
+            m = pattern.search(inp_files[0].read_text())
             if m:
                 cutoff = int(m.group(1))
         if cutoff is None:
-            print(f"WARNING: could not read CUTOFF from input in {run_dir}, skipping.")
+            print(f"WARNING: could not read {label} from input in {run_dir}, skipping.")
             continue
 
         results.append((cutoff, energy_ha))
@@ -104,28 +118,34 @@ def main():
     reference = energies_ha[-1]  # highest cutoff tested = reference
     delta_mev_atom = [(e - reference) * HARTREE_TO_MEV / args.n_atoms for e in energies_ha]
 
-    print(f"{'CUTOFF (Ry)':<14}{'E (Ha)':>18}{'dE (meV/atom)':>18}")
+    print(f"{label + ' (Ry)':<14}{'E (Ha)':>18}{'dE (meV/atom)':>18}")
     for cutoff, e_ha, d in zip(cutoffs, energies_ha, delta_mev_atom):
         print(f"{cutoff:<14}{e_ha:>18.8f}{d:>18.4f}")
 
+    # Smallest value from which it AND every larger value stay within the
+    # threshold -- a single early crossing of the threshold is not convergence.
     recommended = cutoffs[-1]
-    for cutoff, d in zip(cutoffs, delta_mev_atom):
-        if abs(d) <= args.threshold_mev_atom:
+    for i, cutoff in enumerate(cutoffs):
+        if all(abs(d) <= args.threshold_mev_atom for d in delta_mev_atom[i:]):
             recommended = cutoff
             break
 
-    print(f"\nRecommended CUTOFF (first one within {args.threshold_mev_atom} meV/atom "
-          f"of the highest cutoff tested): {recommended} Ry")
-    print("Use this value as --cutoff in kpoint_convergence.py for the next step.")
+    print(f"\nRecommended {label} (smallest one that, with all larger ones, stays within "
+          f"{args.threshold_mev_atom} meV/atom of the highest value tested): {recommended} Ry")
+    if args.scan == "cutoff":
+        print(f"Next step: run the REL_CUTOFF scan at this value "
+              f"(cutoff_convergence.py --scan relcutoff --cutoff {recommended}).")
+    else:
+        print("Use the (CUTOFF, REL_CUTOFF) pair in the next steps.")
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(cutoffs, delta_mev_atom, marker="o")
     ax.axhline(args.threshold_mev_atom, color="gray", linestyle="--", linewidth=1,
                label=f"±{args.threshold_mev_atom} meV/atom threshold")
     ax.axhline(-args.threshold_mev_atom, color="gray", linestyle="--", linewidth=1)
-    ax.set_xlabel("CUTOFF (Ry)")
-    ax.set_ylabel("ΔE relative to highest cutoff (meV/atom)")
-    ax.set_title("MGRID cutoff convergence")
+    ax.set_xlabel(f"{label} (Ry)")
+    ax.set_ylabel(f"ΔE relative to highest {label} (meV/atom)")
+    ax.set_title(f"MGRID {label} convergence")
     ax.legend()
     fig.tight_layout()
     fig.savefig(args.output_plot, dpi=150)

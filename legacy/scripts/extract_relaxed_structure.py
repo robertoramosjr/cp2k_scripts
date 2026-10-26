@@ -9,7 +9,7 @@ pipeline step (e.g. taking the relaxed structure from the winning k-mesh
 in kmesh_stress_convergence.py into the production Etot/GEO_OPT run).
 
 Usage:
-    python ~/scripts/extract_relaxed_structure.py \\
+    python ~/work_cp2k/legacy/scripts/extract_relaxed_structure.py \\
         --restart kmesh_stress_convergence/k6-6-6/stress_k6-6-6-1.restart \\
         --output TiO2_anatase_relaxed.cif
 """
@@ -94,7 +94,7 @@ def main():
           f"(alpha={lattice.alpha:.2f} beta={lattice.beta:.2f} gamma={lattice.gamma:.2f})")
     print(f"CIF written to: {output_path}")
     print(f"\nFeed it into the next step with, e.g.:")
-    print(f"  python ~/scripts/input_generator.py --cif {output_path} "
+    print(f"  python {Path(__file__).resolve().parent / 'input_generator.py'} --cif {output_path} "
           f"--project-name TiO2_etot --run-type GEO_OPT --cutoff <CUTOFF> --kpoints <KX> <KY> <KZ>")
 
 
