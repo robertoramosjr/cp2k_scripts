@@ -9,8 +9,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-COL = {"Au": "#d4af37", "C": "#555555", "N": "#2255cc", "H": "#bbbbbb"}
-SIZE = {"Au": 220, "C": 90, "N": 100, "H": 30}
+COL = {"Au": "#d4af37", "C": "#555555", "N": "#2255cc", "H": "#bbbbbb", "S": "#e6c200"}
+SIZE = {"Au": 220, "C": 90, "N": 100, "H": 30, "S": 120}
 
 
 def read(path):

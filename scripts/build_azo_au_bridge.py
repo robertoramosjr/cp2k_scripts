@@ -12,6 +12,11 @@ Anchoring:
   phys  the centroid-to-centroid axis of the two rings is aligned with z; each apex sits
         --d-au-h from the outermost ring H along that axis (no covalent bond).
 
+  anchored  4,4'-dissubstituted azo (--anchored LABEL=COORD, LABEL ends in _sh or _nh2). Anchor
+        atoms = the two terminal S (thiolate: their H is REMOVED) or terminal N of -NH2 (H kept).
+        Apex Au sits on the C->anchor extension at --d-au-s (S) or --d-au-n (N); the apex-apex
+        vector is aligned with z. Assumptions: thiolate binding, on-top site.
+
 Usage:
   build_azo_au_bridge.py --wire NanoWire_002_cart.vasp \
       --mol trans=azo_trans_hse06_m4_d3/coord --mol cis=azo_cis_hse06_m4_d3/coord \
@@ -127,6 +132,36 @@ def anchor_points(el, xyz, mode, d_au_n, d_au_h):
     return xyz, a1, a2
 
 
+def anchored_mol(el, xyz, grp, d_au_s, d_au_n):
+    """Return (el, rotated xyz, apex1, apex2) for a -SH / -NH2 4,4'-dissubstituted azo."""
+    d = np.linalg.norm(xyz[:, None] - xyz[None], axis=2)
+    cov = {"H": 0.6, "C": 0.8, "N": 0.8, "S": 1.05}
+    bonded = lambda i: [j for j in range(len(el)) if j != i and d[i, j] < 1.25 * (cov[el[i]] + cov[el[j]]) * 1.0 + 0.05]
+    if grp == "sh":
+        anc = [i for i, e in enumerate(el) if e == "S"]
+        drop = [j for i in anc for j in bonded(i) if el[j] == "H"]
+        dist = d_au_s
+    else:
+        anc = [i for i, e in enumerate(el) if e == "N" and sum(el[j] == "H" for j in bonded(i)) == 2]
+        drop, dist = [], d_au_n
+    assert len(anc) == 2, f"expected 2 anchor atoms, found {anc}"
+    ups = []
+    for i in anc:
+        c = [j for j in bonded(i) if el[j] == "C"]
+        assert len(c) == 1, f"anchor {i} bonded to C {c}"
+        v = xyz[i] - xyz[c[0]]
+        ups.append(v / np.linalg.norm(v))
+    t = [xyz[i] + dist * u for i, u in zip(anc, ups)]
+    rot = rotation_to_z(t[1] - t[0])
+    cen = xyz.mean(axis=0)
+    xyz = (xyz - cen) @ rot.T
+    a = [(t[k] - cen) @ rot.T for k in (0, 1)]
+    if a[0][2] > a[1][2]:
+        a.reverse()
+    keep = [i for i in range(len(el)) if i not in drop]
+    return [el[i] for i in keep], xyz[keep], a[0], a[1]
+
+
 def build(wire_au, el, xyz, mode, d_au_n, d_au_h):
     left, right, apex_l, apex_r = split_wire(wire_au)
     mol, a1, a2 = anchor_points(el, xyz, mode, d_au_n, d_au_h)
@@ -163,8 +198,11 @@ def write_xyz(path, el, mol, left, right, cell):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--wire", required=True, help="constricted Au nanowire POSCAR")
-    ap.add_argument("--mol", action="append", required=True, metavar="ISO=COORD",
+    ap.add_argument("--mol", action="append", default=[], metavar="ISO=COORD",
                     help="isomer label=TURBOMOLE coord (repeatable)")
+    ap.add_argument("--anchored", action="append", default=[], metavar="LABEL=COORD",
+                    help="e.g. cis_sh=anchored/cis_sh/coord (LABEL ends in _sh or _nh2)")
+    ap.add_argument("--d-au-s", type=float, default=2.4, help="Au-S distance, anchored thiolate (A)")
     ap.add_argument("--outdir", required=True, type=Path)
     ap.add_argument("--d-au-n", type=float, default=2.2, help="Au-N distance, chemisorbed (A)")
     ap.add_argument("--d-au-h", type=float, default=3.0, help="Au...H distance, physisorbed (A)")
@@ -172,6 +210,18 @@ def main():
     a = ap.parse_args()
     a.outdir.mkdir(parents=True, exist_ok=True)
     wire = read_poscar(a.wire)
+    for spec in a.anchored:
+        label, path = spec.split("=", 1)
+        el, xyz = read_turbomole_coord(path)
+        el, mol, a1, a2 = anchored_mol(el, xyz, label.rsplit("_", 1)[1], a.d_au_s, a.d_au_n)
+        left, right, apex_l, apex_r = split_wire(wire)
+        left, right = left + (a1 - apex_l), right + (a2 - apex_r)
+        report(label, el, mol, left, right, a1, a2)
+        dd = np.linalg.norm(np.vstack([left, right])[:, None] - mol[None], axis=2)
+        for i, e in enumerate(el):
+            if e in "SN" and e == ("S" if label.endswith("sh") else "N") and dd[:, i].min() < 3.0:
+                print(f"   anchor {e}{i}: nearest Au {dd[:, i].min():.2f} A")
+        write_xyz(a.outdir / f"{label}.xyz", el, mol, left, right, a.cell)
     for spec in a.mol:
         iso, path = spec.split("=", 1)
         el, xyz = read_turbomole_coord(path)
