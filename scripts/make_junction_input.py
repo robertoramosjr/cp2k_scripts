@@ -76,6 +76,7 @@ def build(args, cell, atoms):
   &END CONSTRAINT
 &END MOTION
 """
+    uks = f"\n    UKS\n    MULTIPLICITY {args.multiplicity}" if args.multiplicity > 1 else ""
     ignore = "\n      IGNORE_CONVERGENCE_FAILURE TRUE" if args.scf_probe else ""
     return f"""&GLOBAL
   PROJECT {args.project}
@@ -89,7 +90,7 @@ def build(args, cell, atoms):
   METHOD QUICKSTEP
   &DFT
     BASIS_SET_FILE_NAME BASIS_MOLOPT
-    POTENTIAL_FILE_NAME GTH_POTENTIALS
+    POTENTIAL_FILE_NAME GTH_POTENTIALS{uks}
     &MGRID
       CUTOFF {args.cutoff}
       REL_CUTOFF {args.rel_cutoff}
@@ -160,6 +161,8 @@ def main():
     ap.add_argument("--free-au", type=int, default=4, help="relaxing Au atoms per tip")
     ap.add_argument("--scf-probe", action="store_true",
                     help="MAX_SCF 1 + IGNORE_CONVERGENCE_FAILURE (grid convergence scan only)")
+    ap.add_argument("--multiplicity", type=int, default=1,
+                    help=">1 turns on UKS (odd electron count, e.g. thiolate half-bridge: 2)")
     ap.add_argument("--max-iter", type=int, default=300)
     args = ap.parse_args()
     cell, atoms = read_xyz(args.xyz)
