@@ -66,7 +66,7 @@ def added_mos(sigma, nelec, nbands=NBANDS_VASP):
 
 
 def block_input(project, run_type, func, lat, species, frac, cutoff, rel_cutoff, sigma,
-                kpts, grid_scan=False, eps_scf=1.0e-7, nbands=NBANDS_VASP, md=None):
+                kpts, grid_scan=False, eps_scf=1.0e-7, nbands=NBANDS_VASP, md=None, cell_ref_factor=1.15):
     cell_opt = run_type == "CELL_OPT"
     pot, xc = FUNCTIONALS[func]
     nelec = sum(GTH_Q[s] for s in species)
@@ -90,7 +90,7 @@ def block_input(project, run_type, func, lat, species, frac, cutoff, rel_cutoff,
         f"      {a} [angstrom] {v[0]:.10f} {v[1]:.10f} {v[2]:.10f}\n" for a, v in zip("ABC", lat)
     ) + "      PERIODIC XYZ\n" + (
         "    &CELL_REF\n" + "".join(
-            f"      {a} [angstrom] {1.15 * v[0]:.10f} {1.15 * v[1]:.10f} {1.15 * v[2]:.10f}\n"
+            f"      {a} [angstrom] {cell_ref_factor * v[0]:.10f} {cell_ref_factor * v[1]:.10f} {cell_ref_factor * v[2]:.10f}\n"
             for a, v in zip("ABC", lat)) + "    &END CELL_REF\n" if cell_opt else "") + "    &END CELL\n"
     coord = "    &COORD\n      SCALED\n" + "".join(
         f"      {s:<3} {f[0]: .10f} {f[1]: .10f} {f[2]: .10f}\n" for s, f in zip(species, frac)
