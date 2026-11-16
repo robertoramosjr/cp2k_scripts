@@ -11,7 +11,8 @@ PBE, DZVP-MOLOPT-SR-GTH, CUTOFF/REL_CUTOFF, Gaussian smearing 0.01 eV, EPS_SCF, 
   * GEO_OPT LBFGS, MAX_ITER 800, MAX_FORCE 0.01 eV/A (VASP EDIFFG), all atoms free;
   * two stages per slab: <proj>_s1.inp (ENERGY, no dipole, EPS_SCF 1E-5, writes the .kp wfn) then
     <proj>.inp (GEO_OPT, dipole at the fixed vacuum centre SURF_DIP_POS, SCF_GUESS RESTART,
-    EXTRAPOLATION USE_PREV_P: USE_GUESS redoes the guess each geometry step and aborts the dipole).
+    EXTRAPOLATION USE_PREV_WF: USE_GUESS and USE_PREV_P (k-points) give a bad density at the
+    first SCF step of a new geometry, which aborts the dipole correction; test 858).
     The default SURF_DIP_POS (min density, re-searched every step) jumps around in the flat vacuum and
     makes the SCF oscillate; a fixed position from the ATOMIC guess aborts at SCF step 2.
 N per plane = smallest number of 20-atom periods with N*d >= --min-thk (default 9 A).
@@ -142,7 +143,7 @@ def main():
                               ("      SCF_GUESS ATOMIC\n", "      SCF_GUESS RESTART\n"),
                               # USE_GUESS re-runs SCF_GUESS at every geometry step: the fresh guess spills
                               # density into the vacuum and aborts the dipole correction (job 854/855)
-                              ("      EXTRAPOLATION USE_GUESS\n", "      EXTRAPOLATION USE_PREV_P\n")])
+                              ("      EXTRAPOLATION USE_GUESS\n", "      EXTRAPOLATION USE_PREV_WF\n")])
         txt += ("&MOTION\n  &GEO_OPT\n    OPTIMIZER LBFGS\n"
                 f"    MAX_ITER {bp.MAX_ITER}\n    MAX_FORCE [eV*angstrom^-1] {bp.MAX_FORCE}\n  &END GEO_OPT\n"
                 "  &PRINT\n    &RESTART\n      BACKUP_COPIES 3\n      &EACH\n        GEO_OPT 1\n      &END EACH\n"
