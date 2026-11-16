@@ -189,7 +189,7 @@ class Pool:
         ranks = max(1, len(cpus) // self.threads)   # hybrid: harpia gives 900 MB/CPU, 1 GiB/rank measured
         cmd = ["taskset", "-c", ",".join(map(str, cpus)), "mpirun", "-n", str(ranks),
                "cp2k.psmp", "-i", use, "-o", f"{proj}.out"]
-        env = dict(os.environ, OMP_NUM_THREADS=str(self.threads), MKL_NUM_THREADS=str(self.threads), OMP_PLACES="cores", I_MPI_PIN="0",
+        env = dict(os.environ, OMP_NUM_THREADS=str(self.threads), MKL_NUM_THREADS=str(self.threads), OMP_PROC_BIND="false", I_MPI_PIN="0",  # no OMP_PLACES: with a shared taskset mask it pins every rank onto the same first cores
                    I_MPI_HYDRA_BOOTSTRAP="fork", FI_PROVIDER="shm", OMP_STACKSIZE="512M")
         t0 = time.time()
         print(f"[start] {label} on CPUs {cpus[0]}-{cpus[-1]} ({ranks} ranks x {self.threads} thr) input={use}", flush=True)
@@ -284,7 +284,12 @@ def stage_kmesh(a, pool, struct, cutoff, rel):
         j[4] = k
     if a.gen_only:
         return None
-    pool.run_all(jobs[::-1])
+    if a.sequential:   # whole allocation per mesh, one mesh at a time (cheapest first)
+        for j in jobs:
+            j[4] = pool.total
+            pool.run(*j)
+    else:
+        pool.run_all(jobs[::-1])
     rows = []
     for (d, proj, _, tag, _n), m in zip(jobs, a.meshes):
         if not is_done(d, proj, "CELL_OPT"):
@@ -387,6 +392,7 @@ def main():
     p.add_argument("--mesh-list", default=";".join(",".join(map(str, m)) for m in MESHES))
     p.add_argument("--threshold", type=float, default=1.0, help="meV/atom")
     p.add_argument("--vol-threshold", type=float, default=0.5, help="|dV| %% for k-mesh")
+    p.add_argument("--sequential", action="store_true", help="kmesh stage: all CPUs per mesh, meshes one after another")
     p.add_argument("--gen-only", action="store_true", help="write inputs only")
     a = p.parse_args()
     a.meshes = [tuple(int(x) for x in t.split(",")) for t in a.mesh_list.split(";")]

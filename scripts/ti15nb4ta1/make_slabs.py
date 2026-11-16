@@ -58,7 +58,7 @@ def plane_cell(L, E, hkl):
     ker = [np.array(m) for m in itertools.product(rng, rng, rng) if any(m) and np.dot(p, m) == 0]
     cart = lambda m: m @ L
     ker.sort(key=lambda m: np.linalg.norm(cart(m)))
-    G = np.linalg.inv(E).T @ n      # reciprocal (plane normal), 1/A
+    G = np.linalg.inv(E) @ n        # reciprocal (plane normal), 1/A; rows of E = cubic vectors -> G = inv(E) n (inv(E).T only for orthogonal E)
     area_expect = abs(np.linalg.det(L)) * np.linalg.norm(G) / g
     u = None
     for i, m1 in enumerate(ker[:60]):
